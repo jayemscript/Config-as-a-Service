@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import logging
-from typing import Callable
+from contextlib import asynccontextmanager
 
 from src.caas.config import settings
 from src.caas.db.init import init_db
@@ -38,10 +38,23 @@ def create_app() -> FastAPI:
     Returns:
         FastAPI application instance
     """
+    
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """Handle startup and shutdown events."""
+        # Startup
+        logger.info("Initializing database...")
+        init_db()
+        logger.info(f"✓ Application started on {settings.host}:{settings.port}")
+        yield
+        # Shutdown
+        logger.info("✓ Application shutdown")
+    
     app = FastAPI(
         title="Config-as-a-Service",
         description="Centralized configuration management API",
         version="0.1.0",
+        lifespan=lifespan,
     )
 
     # Add CORS middleware
@@ -52,14 +65,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    # Initialize database on startup
-    @app.on_event("startup")
-    async def startup_event():
-        """Initialize database on application startup."""
-        logger.info("Initializing database...")
-        init_db()
-        logger.info(f"✓ Application started on {settings.host}:{settings.port}")
 
     # Global exception handler
     @app.exception_handler(Exception)
@@ -82,3 +87,15 @@ def create_app() -> FastAPI:
 
 # Create app instance
 app = create_app()
+
+
+if __name__ == "__main__":
+    """Run the application with uvicorn."""
+    import uvicorn
+    uvicorn.run(
+        "src.caas.main:app",
+        host=settings.host,
+        port=settings.port,
+        reload=False,
+        log_level=settings.log_level.lower()
+    )
