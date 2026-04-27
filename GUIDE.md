@@ -1,534 +1,179 @@
-# Getting Started with Config-as-a-Service
+# CaaS — Setup & Usage Guide
 
-This guide walks you through installing and using CaaS locally for the first time.
-
----
-
-## Table of Contents
-
-1. [Installation](#installation)
-2. [Quick Start](#quick-start)
-3. [API Usage](#api-usage)
-4. [CLI Usage](#cli-usage)
-5. [Troubleshooting](#troubleshooting)
+> **One command to rule them all.**  
+> After the initial venv setup, everything runs through `python run.py --caas`.
 
 ---
 
-## Installation
+## Prerequisites
 
-### Prerequisites
+- Python 3.11 or later
+- Git
 
-- Python 3.11 or higher
-- pip (Python package manager)
-- Git (to clone the repository)
+---
 
-### Step 1: Clone the Repository
+## Step 1 — Clone the repository
 
 ```bash
-git clone https://github.com/yourusername/Config-as-a-Service.git
+git clone https://github.com/jayemscript/Config-as-a-Service.git
 cd Config-as-a-Service
 ```
 
-### Step 2: Create a Virtual Environment
+---
 
-```bash
-# On macOS/Linux
-python3 -m venv venv
-source venv/bin/activate
+## Step 2 — Create and activate a virtual environment
 
-# On Windows
+**Windows (PowerShell)**
+```powershell
 python -m venv venv
-venv\Scripts\activate
+venv\Scripts\Activate.ps1
 ```
 
-### Step 3: Install Dependencies
+**macOS / Linux**
+```bash
+python -m venv venv
+source venv/bin/activate
+```
+
+> Your prompt should now show `(venv)` to confirm the environment is active.
+
+---
+
+## Step 3 — Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Step 4: Set Up Environment Variables
+---
+
+## Step 4 — Launch CaaS
 
 ```bash
-cp .env.example .env
+python run.py --caas
 ```
 
-Now generate and add encryption keys to `.env`:
+That's it. From here the interactive wizard handles everything else.
 
-```bash
-# Generate Fernet encryption key
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-# Copy the output and set ENCRYPTION_KEY in .env
+---
 
-# Generate JWT secret key
-python -c "import secrets; print(secrets.token_urlsafe(32))"
-# Copy the output and set JWT_SECRET_KEY in .env
+## What happens when you run `--caas`
+
+### First run (no `.env` present)
+The wizard walks you through 4 configuration steps:
+
+| Step | What it configures |
+|------|--------------------|
+| 1    | **Database** — SQLite (default, zero setup) or PostgreSQL |
+| 2    | **Auth & Security** — JWT secret, admin API token, algorithm, expiry |
+| 3    | **Server** — host, port, environment type, debug/reload flags |
+| 4    | **Encryption** — Fernet key for encrypting stored config values |
+
+All values are saved to a `.env` file in the project root. Auto-generated secrets are used wherever you leave the prompt blank — **this is recommended**.
+
+### Subsequent runs
+If `.env` already exists, CaaS will ask whether you want to re-run the wizard or skip straight to the running server. Choose **No** to go straight to the operations menu.
+
+---
+
+## Operations Menu
+
+Once the server is running you'll land in an interactive operations menu:
+
+```
+  [1] List all configs
+  [2] Create config
+  [3] Get config by app
+  [4] Update config
+  [5] Delete config
+  [6] Server health check
+  [0] Exit operations menu
 ```
 
-Your `.env` file should look like:
+All operations hit the live API on your behalf — no curl commands needed.
+
+### Example: Creating a config
 
 ```
-PORT=12500
-HOST=127.0.0.1
-DATABASE_URL=sqlite:///./caas_data.db
-ENCRYPTION_KEY=your-generated-fernet-key
-JWT_SECRET_KEY=your-generated-jwt-secret
-JWT_ALGORITHM=HS256
-JWT_EXPIRATION_HOURS=24
-LOG_LEVEL=INFO
+Select operation: 2
+App name: my-backend
+Environment: DEVELOPMENT
+Values (JSON): {"DB_HOST": "localhost", "DB_PORT": "5432", "DEBUG": "true"}
+```
+
+### Example: Fetching a config
+
+```
+Select operation: 3
+App name: my-backend
+Environment: DEVELOPMENT
 ```
 
 ---
 
-## Quick Start
+## Other run modes
 
-### 1. Start the API Server
-
-```bash
-python -m src.caas.main
-```
-
-You should see:
-
-```
-INFO:     Uvicorn running on http://127.0.0.1:12500 (Press CTRL+C to quit)
-✓ Application started on 127.0.0.1:12500
-```
-
-Leave this running in one terminal.
-
-### 2. In Another Terminal, Generate an API Token
-
-```bash
-# Activate the virtual environment if needed
-source venv/bin/activate  # macOS/Linux
-# or
-venv\Scripts\activate  # Windows
-
-# Generate and save token
-python -m src.caas.cli auth generate-token
-```
-
-Output:
-
-```
-✓ Token saved to ~/.caas/token
-✓ Token generated successfully
-  Token: eyJhbGciOiJIUzI1NiI...
-  Expires in: 86400 seconds
-```
-
-### 3. Create Your First Configuration
-
-Using CLI:
-
-```bash
-python -m src.caas.cli config create \
-  --app-name my_app \
-  --env DEVELOPMENT \
-  --inline '{"DB_NAME": "my_db", "DB_PASSWORD": "admin@123#"}'
-```
-
-Output:
-
-```
-✓ Configuration created successfully
-
-============================================================
-App Name:         my_app
-Environment:      DEVELOPMENT
-Version:          1
-Created:          2024-04-24T10:30:00
-Updated:          2024-04-24T10:30:00
-------------------------------------------------------------
-Configuration Values:
-  DB_NAME: my_db
-  DB_PASSWORD: admin@123#
-============================================================
-```
-
-### 4. Retrieve the Configuration
-
-```bash
-python -m src.caas.cli config get my_app --env DEVELOPMENT
-```
-
-Output shows the same configuration with decrypted values.
-
-### 5. Update a Configuration
-
-Partial update (merge specific values):
-
-```bash
-python -m src.caas.cli config update \
-  --app-name my_app \
-  --env DEVELOPMENT \
-  --inline '{"DB_PORT": "5432"}' \
-  --partial
-```
-
-Full update (replace entire values):
-
-```bash
-python -m src.caas.cli config update \
-  --app-name my_app \
-  --env DEVELOPMENT \
-  --inline '{"DB_NAME": "new_db", "DB_PASSWORD": "newpass"}'
-```
-
-### 6. List All Configurations
-
-```bash
-python -m src.caas.cli config list
-```
-
-Output:
-
-```
-App Name             Environment    Version
----------------------------------------------
-my_app               DEVELOPMENT    2
-
-Page 1 of 1 (Total: 1)
-```
-
-### 7. Delete a Configuration
-
-```bash
-python -m src.caas.cli config delete \
-  --app-name my_app \
-  --env DEVELOPMENT
-```
-
-Confirm with `y` when prompted.
+| Command | Purpose |
+|---------|---------|
+| `python run.py --caas` | Full setup wizard + start server + ops menu |
+| `python run.py --start` | Start server only (skips wizard, uses existing `.env`) |
+| `python run.py --ops` | Open ops menu only (requires server already running) |
+| `python run.py --reconfigure` | Re-run the configuration wizard |
 
 ---
 
-## API Usage
+## REST API
 
-### Using cURL
+The server starts on port **12500** by default (configurable in the wizard).
 
-#### Generate Token
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/health` | Health check |
+| GET    | `/docs`   | Interactive API docs (Swagger UI) |
+| GET    | `/api/v1/configs` | List all configs |
+| POST   | `/api/v1/configs` | Create a config |
+| GET    | `/api/v1/configs/{app_name}` | Get config by app |
+| PUT    | `/api/v1/configs/{app_name}` | Update config |
+| DELETE | `/api/v1/configs/{app_name}` | Delete config |
 
-```bash
-curl -X POST http://127.0.0.1:12500/cass/auth/token
-```
-
-Response:
-
-```json
-{
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "token_type": "bearer",
-  "expires_in": 86400
-}
-```
-
-#### Create Configuration
-
-```bash
-curl -X POST http://127.0.0.1:12500/cass/create \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -d '{
-    "app_name": "my_app",
-    "environment_type": "DEVELOPMENT",
-    "values": {
-      "DB_NAME": "my_db",
-      "DB_PASSWORD": "admin@123#",
-      "API_KEY": "secret-key"
-    }
-  }'
-```
-
-#### Get Configuration
-
-```bash
-curl http://127.0.0.1:12500/cass/get/my_app \
-  -H "Authorization: Bearer YOUR_TOKEN"
-```
-
-#### Update Configuration
-
-Replace entire values (PUT):
-
-```bash
-curl -X PUT http://127.0.0.1:12500/cass/update \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -d '{
-    "app_name": "my_app",
-    "environment_type": "DEVELOPMENT",
-    "values": {
-      "DB_NAME": "new_db",
-      "DB_PASSWORD": "newpass"
-    }
-  }'
-```
-
-Partial update (merge specific keys):
-
-```bash
-curl -X PATCH http://127.0.0.1:12500/cass/update/partial \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -d '{
-    "app_name": "my_app",
-    "environment_type": "DEVELOPMENT",
-    "values": {
-      "API_KEY": "new-key-value"
-    }
-  }'
-```
-
-#### List Configurations (Paginated)
-
-```bash
-curl "http://127.0.0.1:12500/cass/get/paginated?page=1&limit=10&search=my" \
-  -H "Authorization: Bearer YOUR_TOKEN"
-```
-
-Response:
-
-```json
-{
-  "items": [...],
-  "total": 1,
-  "page": 1,
-  "limit": 10,
-  "pages": 1
-}
-```
-
-#### Delete Configuration
-
-```bash
-curl -X DELETE http://127.0.0.1:12500/cass/delete \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -d '{
-    "app_name": "my_app",
-    "environment_type": "DEVELOPMENT"
-  }'
-```
+All endpoints (except `/health` and `/docs`) require the `Authorization: Bearer <ADMIN_API_TOKEN>` header. Your token is shown in the terminal after the wizard and is stored in `.env`.
 
 ---
 
-## CLI Usage
+## Environment types
 
-### Commands Reference
+CaaS supports three environment classifications:
 
-#### Authentication
+- `DEVELOPMENT`
+- `STAGING`
+- `PRODUCTION`
 
-```bash
-# Generate and save token
-caas auth generate-token
+Each app can have a separate config per environment type.
 
-# Show current token
-caas auth show
+---
 
-# Remove stored token
-caas auth logout
-```
+## Security notes
 
-#### Configuration Management
-
-```bash
-# Create from inline JSON
-caas config create \
-  --app-name myapp \
-  --env DEVELOPMENT \
-  --inline '{"KEY":"value"}'
-
-# Create from JSON file
-caas config create \
-  --app-name myapp \
-  --env DEVELOPMENT \
-  --values config.json
-
-# Get configuration
-caas config get myapp --env DEVELOPMENT
-
-# Update entire configuration
-caas config update \
-  --app-name myapp \
-  --env DEVELOPMENT \
-  --values new_config.json
-
-# Partial update (merge)
-caas config update \
-  --app-name myapp \
-  --env DEVELOPMENT \
-  --inline '{"KEY":"new_value"}' \
-  --partial
-
-# List configurations
-caas config list --page 1 --limit 20 --search myapp --env DEVELOPMENT
-
-# Delete configuration
-caas config delete --app-name myapp --env DEVELOPMENT
-```
-
-### Using a JSON File
-
-Create `config.json`:
-
-```json
-{
-  "DB_HOST": "localhost",
-  "DB_PORT": "5432",
-  "DB_NAME": "mydb",
-  "DB_USER": "admin",
-  "DB_PASSWORD": "secret"
-}
-```
-
-Use in CLI:
-
-```bash
-caas config create --app-name my_app --env DEVELOPMENT --values config.json
-```
+- **Never commit `.env` to version control.** It's already in `.gitignore`.
+- The encryption key in `.env` is used to encrypt all stored config values. Back it up securely.
+- If you lose the encryption key, stored values cannot be decrypted.
+- For production use, set `DEBUG=false` and `RELOAD=false`.
 
 ---
 
 ## Troubleshooting
 
-### Connection Refused
+**`python run.py --caas` gives `ModuleNotFoundError`**  
+→ Make sure your venv is activated and you ran `pip install -r requirements.txt`.
 
-**Error:** `Connection failed. Is the API running?`
+**Operations menu says "Cannot reach the server"**  
+→ The server may have failed to start. Check the terminal output for errors.
 
-**Solution:** Make sure the API server is running:
-
-```bash
-python -m src.caas.main
-```
-
-### Invalid Token
-
-**Error:** `No token stored` or token expired
-
-**Solution:** Generate a new token:
-
-```bash
-caas auth generate-token
-```
-
-### Database Locked
-
-**Error:** `database is locked`
-
-**Solution:** This can happen with SQLite. Usually temporary. Wait a moment and retry.
-
-### Port Already in Use
-
-**Error:** `Address already in use`
-
-**Solution:** Change the port in `.env`:
-
-```
-PORT=12501
-```
-
-Then restart the server.
-
-### Invalid Environment Variable
-
-**Error:** `Invalid encryption key format`
-
-**Solution:** Ensure `ENCRYPTION_KEY` is a valid Fernet key:
-
-```bash
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-```
-
-Copy the output to `.env` and restart.
-
-### Permission Denied on CLI
-
-**Error:** `Permission denied` on `~/.caas/token`
-
-**Solution:** Fix permissions:
-
-```bash
-chmod 600 ~/.caas/token
-```
+**Port 12500 is already in use**  
+→ Re-run `python run.py --reconfigure` and choose a different port.
 
 ---
 
-## Next Steps
+## Next release
 
-1. **Run Tests:** `pytest` to verify everything works
-2. **Explore API Docs:** Open http://127.0.0.1:12500/docs in a browser
-3. **Read SECURITY.md:** Understand security considerations
-4. **Check CONTRIBUTING.md:** Get involved in development
-
----
-
-## Getting Help
-
-- Check [SECURITY.md](SECURITY.md) for security questions
-- See [CONTRIBUTING.md](CONTRIBUTING.md) to contribute
-- Open an issue on GitHub for bugs
-- Check existing issues for common problems
-
----
-
-## Common Workflows
-
-### Workflow: Development Environment Setup
-
-```bash
-# Create app config for local development
-caas config create \
-  --app-name backend \
-  --env DEVELOPMENT \
-  --values dev_config.json
-
-# Where dev_config.json contains:
-# {
-#   "DB_HOST": "localhost",
-#   "DB_PORT": "5432",
-#   "API_DEBUG": "true",
-#   "LOG_LEVEL": "DEBUG"
-# }
-```
-
-### Workflow: Managing Multiple Environments
-
-```bash
-# Create DEVELOPMENT config
-caas config create \
-  --app-name myapp \
-  --env DEVELOPMENT \
-  --values dev_config.json
-
-# Create STAGING config
-caas config create \
-  --app-name myapp \
-  --env STAGING \
-  --values staging_config.json
-
-# Create PRODUCTION config
-caas config create \
-  --app-name myapp \
-  --env PRODUCTION \
-  --values prod_config.json
-
-# Retrieve based on environment
-caas config get myapp --env STAGING
-```
-
-### Workflow: Updating Credentials
-
-```bash
-# Only update specific values
-caas config update \
-  --app-name myapp \
-  --env PRODUCTION \
-  --inline '{"DB_PASSWORD":"new-secure-password"}' \
-  --partial
-```
-
----
-
-Enjoy using Config-as-a-Service! 🚀
+An `.exe`-based installer for Windows is planned for the next release. For now, this terminal-based setup is the supported self-hosting path.

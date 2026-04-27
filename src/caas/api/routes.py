@@ -16,7 +16,8 @@ from src.caas.api.schemas import (
     PaginatedResponse,
     TokenResponse,
 )
-from src.caas.main import cipher_manager, token_manager, app as main_app
+# ✅ Import from dependencies, NOT from src.caas.main (that caused the circular import)
+from src.caas.dependencies import cipher_manager, token_manager
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ router = APIRouter(prefix="/cass", tags=["configuration"])
 async def generate_token():
     """
     Generate a new JWT token for API access.
-    
+
     Returns:
         TokenResponse with access token and expiration
     """
@@ -57,42 +58,38 @@ async def create_configuration(
 ):
     """
     Create a new configuration entry.
-    
+
     - Validates app_name + environment_type uniqueness
     - Encrypts configuration values before storage
     - Initializes version to 1
     """
     try:
-        # Check if configuration already exists
         existing = db.query(Configuration).filter(
             Configuration.app_name == config.app_name,
             Configuration.environment_type == config.environment_type
         ).first()
-        
+
         if existing:
             raise HTTPException(
                 status_code=409,
                 detail=f"Configuration for '{config.app_name}' in {config.environment_type} already exists"
             )
-        
-        # Encrypt values
+
         encrypted_values = cipher_manager.encrypt_dict(config.values)
-        
-        # Create new configuration
+
         new_config = Configuration(
             app_name=config.app_name,
             environment_type=config.environment_type,
             values=encrypted_values,
             version=1
         )
-        
+
         db.add(new_config)
         db.commit()
         db.refresh(new_config)
-        
-        # Decrypt for response
+
         decrypted = cipher_manager.decrypt_dict(new_config.values)
-        
+
         logger.info(f"Created configuration: {config.app_name} ({config.environment_type})")
         return ConfigurationResponse(
             id=new_config.id,
@@ -103,7 +100,7 @@ async def create_configuration(
             created_at=new_config.created_at,
             updated_at=new_config.updated_at
         )
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -120,24 +117,23 @@ async def get_configuration(
 ):
     """
     Retrieve a configuration by app_name and optional environment_type.
-    
+
     - If environment_type not specified, returns the first match
     - Automatically decrypts values before returning
     """
     try:
         query = db.query(Configuration).filter(Configuration.app_name == app_name)
-        
+
         if environment_type:
             query = query.filter(Configuration.environment_type == environment_type)
-        
+
         config = query.first()
-        
+
         if not config:
             raise HTTPException(status_code=404, detail=f"Configuration '{app_name}' not found")
-        
-        # Decrypt values
+
         decrypted = cipher_manager.decrypt_dict(config.values)
-        
+
         logger.info(f"Retrieved configuration: {app_name}")
         return ConfigurationResponse(
             id=config.id,
@@ -148,7 +144,7 @@ async def get_configuration(
             created_at=config.created_at,
             updated_at=config.updated_at
         )
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -163,7 +159,7 @@ async def update_configuration(
 ):
     """
     Fully replace configuration values.
-    
+
     - Replaces entire values object
     - Increments version number
     - Updates updated_at timestamp
@@ -173,23 +169,20 @@ async def update_configuration(
             Configuration.app_name == config_update.app_name,
             Configuration.environment_type == config_update.environment_type
         ).first()
-        
+
         if not config:
             raise HTTPException(status_code=404, detail="Configuration not found")
-        
-        # Encrypt new values
+
         encrypted_values = cipher_manager.encrypt_dict(config_update.values)
-        
-        # Update configuration
+
         config.values = encrypted_values
         config.version += 1
-        
+
         db.commit()
         db.refresh(config)
-        
-        # Decrypt for response
+
         decrypted = cipher_manager.decrypt_dict(config.values)
-        
+
         logger.info(f"Updated configuration: {config_update.app_name} (v{config.version})")
         return ConfigurationResponse(
             id=config.id,
@@ -200,7 +193,7 @@ async def update_configuration(
             created_at=config.created_at,
             updated_at=config.updated_at
         )
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -216,7 +209,7 @@ async def partial_update_configuration(
 ):
     """
     Partially update configuration values (merge).
-    
+
     - Merges new values with existing (only updates specified keys)
     - Increments version number
     - Updates updated_at timestamp
@@ -226,29 +219,22 @@ async def partial_update_configuration(
             Configuration.app_name == config_update.app_name,
             Configuration.environment_type == config_update.environment_type
         ).first()
-        
+
         if not config:
             raise HTTPException(status_code=404, detail="Configuration not found")
-        
-        # Decrypt existing values
+
         existing_values = cipher_manager.decrypt_dict(config.values)
-        
-        # Merge new values with existing
         existing_values.update(config_update.values)
-        
-        # Encrypt merged values
         encrypted_values = cipher_manager.encrypt_dict(existing_values)
-        
-        # Update configuration
+
         config.values = encrypted_values
         config.version += 1
-        
+
         db.commit()
         db.refresh(config)
-        
-        # Decrypt for response
+
         decrypted = cipher_manager.decrypt_dict(config.values)
-        
+
         logger.info(f"Partially updated configuration: {config_update.app_name} (v{config.version})")
         return ConfigurationResponse(
             id=config.id,
@@ -259,7 +245,7 @@ async def partial_update_configuration(
             created_at=config.created_at,
             updated_at=config.updated_at
         )
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -278,7 +264,7 @@ async def list_configurations_paginated(
 ):
     """
     List all configurations with server-side pagination.
-    
+
     - Supports pagination (page, limit)
     - Supports search by app_name
     - Supports filtering by environment_type
@@ -286,25 +272,18 @@ async def list_configurations_paginated(
     """
     try:
         query = db.query(Configuration)
-        
-        # Apply filters
+
         if search:
             query = query.filter(Configuration.app_name.ilike(f"%{search}%"))
-        
+
         if environment_type:
             query = query.filter(Configuration.environment_type == environment_type)
-        
-        # Get total count
+
         total = query.count()
-        
-        # Calculate pagination
         offset = (page - 1) * limit
         pages = (total + limit - 1) // limit
-        
-        # Get paginated results
         configs = query.offset(offset).limit(limit).all()
-        
-        # Decrypt values and convert to response models
+
         items = []
         for config in configs:
             decrypted = cipher_manager.decrypt_dict(config.values)
@@ -317,7 +296,7 @@ async def list_configurations_paginated(
                 created_at=config.created_at,
                 updated_at=config.updated_at
             ))
-        
+
         logger.info(f"Listed configurations: page {page}, limit {limit}, total {total}")
         return PaginatedResponse(
             items=items,
@@ -326,7 +305,7 @@ async def list_configurations_paginated(
             limit=limit,
             pages=pages
         )
-    
+
     except Exception as e:
         logger.error(f"Configuration listing failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -339,7 +318,7 @@ async def delete_configuration(
 ):
     """
     Permanently delete a configuration.
-    
+
     - Requires app_name and environment_type
     - Operation is irreversible
     """
@@ -348,18 +327,18 @@ async def delete_configuration(
             Configuration.app_name == config_delete.app_name,
             Configuration.environment_type == config_delete.environment_type
         ).first()
-        
+
         if not config:
             raise HTTPException(status_code=404, detail="Configuration not found")
-        
+
         db.delete(config)
         db.commit()
-        
+
         logger.info(f"Deleted configuration: {config_delete.app_name}")
         return {
             "message": f"Configuration '{config_delete.app_name}' deleted successfully"
         }
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -367,6 +346,3 @@ async def delete_configuration(
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# Include router in main app
-main_app.include_router(router)

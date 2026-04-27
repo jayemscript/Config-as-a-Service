@@ -8,12 +8,9 @@ from contextlib import asynccontextmanager
 
 from src.caas.config import settings
 from src.caas.db.init import init_db
-from src.caas.encryption.cipher import CipherManager
-from src.caas.auth import TokenManager
 
-# Import routes (must be after cipher_manager and token_manager are initialized)
-# This import registers all routes with the app
-import src.caas.api.routes  # noqa: F401
+# Import shared instances (cipher_manager, token_manager live here)
+from src.caas.dependencies import cipher_manager, token_manager  # noqa: F401
 
 # Configure logging
 logging.basicConfig(
@@ -22,34 +19,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Initialize global instances
-cipher_manager = CipherManager(settings.encryption_key)
-token_manager = TokenManager(
-    settings.jwt_secret_key,
-    settings.jwt_algorithm,
-    settings.jwt_expiration_hours
-)
-
 
 def create_app() -> FastAPI:
     """
     Create and configure FastAPI application.
-    
+
     Returns:
         FastAPI application instance
     """
-    
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Handle startup and shutdown events."""
-        # Startup
         logger.info("Initializing database...")
         init_db()
         logger.info(f"✓ Application started on {settings.host}:{settings.port}")
         yield
-        # Shutdown
         logger.info("✓ Application shutdown")
-    
+
     app = FastAPI(
         title="Config-as-a-Service",
         description="Centralized configuration management API",
@@ -82,6 +69,10 @@ def create_app() -> FastAPI:
         """Health check endpoint."""
         return {"status": "ok"}
 
+    # Register routes AFTER app is created
+    from src.caas.api import routes as _routes  # noqa: F401
+    app.include_router(_routes.router)
+
     return app
 
 
@@ -90,12 +81,11 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    """Run the application with uvicorn."""
     import uvicorn
     uvicorn.run(
         "src.caas.main:app",
         host=settings.host,
         port=settings.port,
         reload=False,
-        log_level=settings.log_level.lower()
+        log_level=settings.log_level.lower(),
     )
