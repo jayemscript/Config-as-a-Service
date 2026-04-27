@@ -16,7 +16,6 @@ from src.caas.api.schemas import (
     PaginatedResponse,
     TokenResponse,
 )
-# ✅ Import from dependencies, NOT from src.caas.main (that caused the circular import)
 from src.caas.dependencies import cipher_manager, token_manager
 
 logger = logging.getLogger(__name__)
@@ -106,6 +105,65 @@ async def create_configuration(
     except Exception as e:
         logger.error(f"Configuration creation failed: {e}")
         db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# NOTE: /get/paginated MUST be defined before /get/{app_name} so FastAPI
+# doesn't swallow the literal "paginated" as an app_name parameter.
+@router.get("/get/paginated", response_model=PaginatedResponse)
+async def list_configurations_paginated(
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, ge=1, le=100),
+    search: Optional[str] = Query(None),
+    environment_type: Optional[EnvironmentType] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """
+    List all configurations with server-side pagination.
+
+    - Supports pagination (page, limit)
+    - Supports search by app_name
+    - Supports filtering by environment_type
+    - Returns paginated result with metadata
+    """
+    try:
+        query = db.query(Configuration)
+
+        if search:
+            query = query.filter(Configuration.app_name.ilike(f"%{search}%"))
+
+        if environment_type:
+            query = query.filter(Configuration.environment_type == environment_type)
+
+        total = query.count()
+        offset = (page - 1) * limit
+        pages = (total + limit - 1) // limit
+        configs = query.offset(offset).limit(limit).all()
+
+        items = []
+        for config in configs:
+            decrypted = cipher_manager.decrypt_dict(config.values)
+            items.append(ConfigurationResponse(
+                id=config.id,
+                app_name=config.app_name,
+                environment_type=config.environment_type,
+                values=decrypted,
+                version=config.version,
+                created_at=config.created_at,
+                updated_at=config.updated_at
+            ))
+
+        logger.info(f"Listed configurations: page {page}, limit {limit}, total {total}")
+        return PaginatedResponse(
+            items=items,
+            total=total,
+            page=page,
+            limit=limit,
+            pages=pages
+        )
+
+    except Exception as e:
+        logger.error(f"Configuration listing failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -251,63 +309,6 @@ async def partial_update_configuration(
     except Exception as e:
         logger.error(f"Partial configuration update failed: {e}")
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/get/paginated", response_model=PaginatedResponse)
-async def list_configurations_paginated(
-    page: int = Query(1, ge=1),
-    limit: int = Query(10, ge=1, le=100),
-    search: Optional[str] = Query(None),
-    environment_type: Optional[EnvironmentType] = Query(None),
-    db: Session = Depends(get_db)
-):
-    """
-    List all configurations with server-side pagination.
-
-    - Supports pagination (page, limit)
-    - Supports search by app_name
-    - Supports filtering by environment_type
-    - Returns paginated result with metadata
-    """
-    try:
-        query = db.query(Configuration)
-
-        if search:
-            query = query.filter(Configuration.app_name.ilike(f"%{search}%"))
-
-        if environment_type:
-            query = query.filter(Configuration.environment_type == environment_type)
-
-        total = query.count()
-        offset = (page - 1) * limit
-        pages = (total + limit - 1) // limit
-        configs = query.offset(offset).limit(limit).all()
-
-        items = []
-        for config in configs:
-            decrypted = cipher_manager.decrypt_dict(config.values)
-            items.append(ConfigurationResponse(
-                id=config.id,
-                app_name=config.app_name,
-                environment_type=config.environment_type,
-                values=decrypted,
-                version=config.version,
-                created_at=config.created_at,
-                updated_at=config.updated_at
-            ))
-
-        logger.info(f"Listed configurations: page {page}, limit {limit}, total {total}")
-        return PaginatedResponse(
-            items=items,
-            total=total,
-            page=page,
-            limit=limit,
-            pages=pages
-        )
-
-    except Exception as e:
-        logger.error(f"Configuration listing failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

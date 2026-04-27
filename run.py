@@ -41,7 +41,7 @@ def print_step(n: int, total: int, msg: str):
 
 
 def print_success(msg: str):
-    click.echo(click.style("  ✔ ", fg="green") + msg)
+    click.echo(click.style(" ", fg="green") + msg)
 
 
 def print_error(msg: str):
@@ -158,15 +158,27 @@ def step_server() -> dict:
 def step_encryption() -> dict:
     click.echo(click.style("\n  Configure Encryption", fg="cyan", bold=True))
     click.echo("  CaaS encrypts sensitive config values at rest using Fernet (AES-128).")
+    click.echo("  Keys must be valid Fernet keys (32 url-safe base64-encoded bytes).")
 
-    auto_enc = secrets.token_urlsafe(32)
+    # Fernet.generate_key() produces the exact format Fernet requires.
+    # secrets.token_urlsafe() does NOT — it generates an incompatible format.
+    from cryptography.fernet import Fernet
+    auto_enc = Fernet.generate_key().decode()
+
     click.echo(click.style("  Encryption key (press Enter to auto-generate):", fg="white"))
     enc_key = click.prompt("  >", default="", hide_input=True, show_default=False)
     if not enc_key.strip():
         enc_key = auto_enc
-        print_success("Auto-generated encryption key.")
+        print_success("Auto-generated Fernet encryption key.")
     else:
-        print_success("Custom encryption key set.")
+        # Validate the custom key
+        try:
+            Fernet(enc_key.encode())
+            print_success("Custom encryption key set.")
+        except Exception:
+            click.echo(click.style("  ! Invalid Fernet key. Using auto-generated key instead.", fg="yellow"))
+            enc_key = auto_enc
+            print_success("Auto-generated Fernet encryption key.")
 
     return {"ENCRYPTION_KEY": enc_key}
 
@@ -235,8 +247,10 @@ def api_call(method: str, url: str, token: str, payload: dict = None):
             r = requests.post(url, headers=headers, json=payload, timeout=5)
         elif method == "PUT":
             r = requests.put(url, headers=headers, json=payload, timeout=5)
+        elif method == "PATCH":
+            r = requests.patch(url, headers=headers, json=payload, timeout=5)
         elif method == "DELETE":
-            r = requests.delete(url, headers=headers, timeout=5)
+            r = requests.delete(url, headers=headers, json=payload, timeout=5)
         else:
             return None
         return r
@@ -246,8 +260,21 @@ def api_call(method: str, url: str, token: str, payload: dict = None):
 
 
 def ops_menu(cfg: dict):
-    base   = get_base_url(cfg)
-    token  = cfg.get("ADMIN_API_TOKEN", cfg.get("JWT_SECRET_KEY", ""))
+    base  = get_base_url(cfg)
+
+    # Fetch a JWT access token from the server before entering the menu.
+    # The /cass/auth/token endpoint generates a token signed with JWT_SECRET_KEY.
+    import requests as _req
+    token = ""
+    try:
+        resp = _req.post(f"{base}/cass/auth/token", timeout=5)
+        if resp.status_code == 200:
+            token = resp.json().get("access_token", "")
+            print_success("JWT token acquired.")
+        else:
+            print_error(f"Could not get token (HTTP {resp.status_code}). API calls may fail.")
+    except Exception as e:
+        print_error(f"Could not get token: {e}. API calls may fail.")
 
     ops = {
         "1": ("List all configs",     "list"),
@@ -281,14 +308,16 @@ def ops_menu(cfg: dict):
                 click.echo(click.style(f"\n  Status {r.status_code}: ", fg="green") + r.text)
 
         elif action == "list":
-            r = api_call("GET", f"{base}/api/v1/configs", token)
+            # GET /cass/get/paginated
+            r = api_call("GET", f"{base}/cass/get/paginated", token)
             if r:
                 _pretty(r)
 
         elif action == "get":
             app_name = click.prompt("  App name")
             env      = choose("Environment", ["DEVELOPMENT", "STAGING", "PRODUCTION"], "DEVELOPMENT")
-            r = api_call("GET", f"{base}/api/v1/configs/{app_name}?environment={env}", token)
+            # GET /cass/get/{app_name}?environment_type=...
+            r = api_call("GET", f"{base}/cass/get/{app_name}?environment_type={env}", token)
             if r:
                 _pretty(r)
 
@@ -303,8 +332,9 @@ def ops_menu(cfg: dict):
             except json.JSONDecodeError:
                 print_error("Invalid JSON. Please try again.")
                 continue
+            # POST /cass/create
             payload = {"app_name": app_name, "environment_type": env, "values": values}
-            r = api_call("POST", f"{base}/api/v1/configs", token, payload)
+            r = api_call("POST", f"{base}/cass/create", token, payload)
             if r:
                 _pretty(r)
 
@@ -318,8 +348,9 @@ def ops_menu(cfg: dict):
             except json.JSONDecodeError:
                 print_error("Invalid JSON. Please try again.")
                 continue
-            payload = {"values": values}
-            r = api_call("PUT", f"{base}/api/v1/configs/{app_name}?environment={env}", token, payload)
+            # PATCH /cass/update/partial  (merge update — only changes specified keys)
+            payload = {"app_name": app_name, "environment_type": env, "values": values}
+            r = api_call("PATCH", f"{base}/cass/update/partial", token, payload)
             if r:
                 _pretty(r)
 
@@ -328,7 +359,9 @@ def ops_menu(cfg: dict):
             env      = choose("Environment", ["DEVELOPMENT", "STAGING", "PRODUCTION"], "DEVELOPMENT")
             confirm  = click.confirm(f"  Delete config for '{app_name}' [{env}]?", default=False)
             if confirm:
-                r = api_call("DELETE", f"{base}/api/v1/configs/{app_name}?environment={env}", token)
+                # DELETE /cass/delete  (body: app_name + environment_type)
+                payload = {"app_name": app_name, "environment_type": env}
+                r = api_call("DELETE", f"{base}/cass/delete", token, payload)
                 if r:
                     _pretty(r)
             else:
@@ -522,7 +555,7 @@ def _run_setup():
     click.echo(click.style("\n  Writing configuration…", fg="cyan"))
     write_env(full_cfg)
 
-    click.echo(click.style("\n  ✔ Configuration complete!\n", fg="green", bold=True))
+    click.echo(click.style("\n Configuration complete!\n", fg="green", bold=True))
 
 
 if __name__ == "__main__":
